@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>会議室予約フォーム</title>
+<style>
+  body { font-family: sans-serif; padding: 16px; }
+  label { font-weight: bold; display: block; margin-top: 16px; }
+  select, input {
+    width: 100%; padding: 10px; margin-top: 6px; font-size: 16px;
+  }
+  button {
+    margin-top: 24px; width: 100%; padding: 14px;
+    font-size: 18px; background-color: #2196F3; color: #fff;
+    border: none; border-radius: 6px;
+  }
+</style>
+<script src="https://static.worksmobile.net/static/wm/woff/1.0/sdk.js"></script>
+</head>
+<body>
+
+<h2>会議室予約フォーム</h2>
+
+<label>日付</label>
+<input type="date" id="date">
+
+<label>開始時刻</label>
+<select id="start"></select>
+
+<label>終了時刻</label>
+<select id="end"></select>
+
+<button id="reserveBtn">予約する</button>
+
+<script>
+(async () => {
+  const user = await woff.init({ woffId: "YOUR_WOFF_ID" });
+
+  function getParams() {
+    const params = {};
+    location.search.substring(1).split("&").forEach(q => {
+      const [k, v] = q.split("=");
+      params[k] = decodeURIComponent(v);
+    });
+    return params;
+  }
+
+  const p = getParams();
+
+  function generateOptions(sel) {
+    for (let h = 9; h <= 18; h++) {
+      for (let m of [0, 30]) {
+        const hh = String(h).padStart(2, "0");
+        const mm = String(m).padStart(2, "0");
+        sel.innerHTML += `<option value="${hh}:${mm}">${hh}:${mm}</option>`;
+      }
+    }
+  }
+
+  generateOptions(document.getElementById("start"));
+  generateOptions(document.getElementById("end"));
+
+  document.getElementById("date").value = p.date;
+  document.getElementById("start").value = p.start;
+
+  const [h, m] = p.start.split(":").map(Number);
+  const endMinutes = h * 60 + m + 30;
+  const eh = String(Math.floor(endMinutes / 60)).padStart(2, "0");
+  const em = String(endMinutes % 60).padStart(2, "0");
+  document.getElementById("end").value = `${eh}:${em}`;
+
+  document.getElementById("reserveBtn").addEventListener("click", async () => {
+    const date = document.getElementById("date").value;
+    const start = document.getElementById("start").value;
+    const end = document.getElementById("end").value;
+
+    const payload = {
+      date: date,
+      start_time: start,
+      end_time: end,
+      requester_name: user.name,
+      requester_id: user.id,
+      title: "会議室予約"
+    };
+
+    const res = await fetch("https://murotanisunlife-github-io.onrender.com/reserve", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload)
+    });
+
+    const data = await res.json();
+
+    if (data.status === "ok") {
+      location.href = `complete.html?date=${date}&start=${start}&end=${end}`;
+    } else {
+      alert("予約に失敗：" + JSON.stringify(data));
+    }
+  });
+})();
+</script>
+
+</body>
+</html>

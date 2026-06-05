@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>予約完了</title>
+<style>
+  body {
+    font-family: sans-serif;
+    padding: 20px;
+    text-align: center;
+  }
+  .box {
+    padding: 20px;
+    border-radius: 8px;
+    background-color: #E8F5E9;
+    border: 1px solid #C8E6C9;
+    margin-bottom: 24px;
+  }
+  button {
+    width: 100%;
+    padding: 14px;
+    font-size: 18px;
+    background-color: #2196F3;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+  }
+</style>
+<script src="https://static.worksmobile.net/static/wm/woff/1.0/sdk.js"></script>
+</head>
+<body>
+
+<h2>予約が完了しました</h2>
+
+<div class="box" id="infoBox"></div>
+
+<button id="sendBtn">LINE WORKS に送信</button>
+
+<script>
+(async () => {
+  // 1. WOFF 初期化
+  const user = await woff.init({
+    woffId: "YOUR_WOFF_ID"
+  });
+
+  // 2. URL パラメータ取得
+  function getQueryParams() {
+    const params = {};
+    const query = location.search.substring(1).split("&");
+    for (const q of query) {
+      const [key, value] = q.split("=");
+      params[key] = decodeURIComponent(value);
+    }
+    return params;
+  }
+
+  const params = getQueryParams();
+  const date = params.date;
+  const start = params.start;
+  const end = params.end;
+
+  // 3. 完了メッセージ表示
+  document.getElementById("infoBox").innerHTML = `
+    <div>
+      <strong>${date}</strong><br>
+      ${start} 〜 ${end}<br><br>
+      で予約を登録しました。
+    </div>
+  `;
+
+  // 4. LINE WORKS に送信
+  document.getElementById("sendBtn").addEventListener("click", async () => {
+    const message = `会議室を予約しました。\n${date} ${start}〜${end}`;
+
+    try {
+      await woff.sendMessage({
+        type: "text",
+        text: message
+      });
+      alert("LINE WORKS に送信しました！");
+    } catch (e) {
+      alert("送信に失敗しました：" + e);
+    }
+  });
+})();
+</script>
+
+</body>
+</html>

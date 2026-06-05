@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>自分の予約一覧</title>
+<style>
+  body { font-family: sans-serif; padding: 16px; }
+  .item {
+    padding: 12px;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    margin-bottom: 12px;
+  }
+  button {
+    margin-top: 10px;
+    padding: 8px 12px;
+    border: none;
+    border-radius: 4px;
+    color: #fff;
+  }
+  .editBtn { background-color: #FF9800; }
+  .cancelBtn { background-color: #F44336; }
+</style>
+<script src="https://static.worksmobile.net/static/wm/woff/1.0/sdk.js"></script>
+</head>
+<body>
+
+<h2>自分の予約一覧</h2>
+
+<label>日付を選択</label>
+<input type="date" id="datePicker">
+<button onclick="loadReservations()">読み込み</button>
+
+<div id="list" style="margin-top:20px;"></div>
+
+<script>
+let user;
+
+(async () => {
+  user = await woff.init({ woffId: "YOUR_WOFF_ID" });
+
+  // 今日を初期値に
+  const today = new Date();
+  const yyyy = today.getFullYear();
+  const mm = String(today.getMonth() + 1).padStart(2, "0");
+  const dd = String(today.getDate()).padStart(2, "0");
+  document.getElementById("datePicker").value = `${yyyy}-${mm}-${dd}`;
+
+  loadReservations();
+})();
+
+async function loadReservations() {
+  const date = document.getElementById("datePicker").value;
+  const apiUrl = `https://murotanisunlife-github-io.onrender.com/my_reservations?user_id=${user.id}&target_date=${date}`;
+
+  const res = await fetch(apiUrl);
+  const data = await res.json();
+
+  const list = document.getElementById("list");
+  list.innerHTML = "";
+
+  if (data.length === 0) {
+    list.innerHTML = "<p>予約はありません</p>";
+    return;
+  }
+
+  data.forEach(ev => {
+    const div = document.createElement("div");
+    div.classList.add("item");
+
+    const start = ev.start.replace("T", " ").substring(0, 16);
+    const end = ev.end.replace("T", " ").substring(0, 16);
+
+    div.innerHTML = `
+      <div><strong>${ev.summary}</strong></div>
+      <div>${start} 〜 ${end}</div>
+      <button class="editBtn" onclick="goEdit('${ev.event_id}', '${start}', '${end}')">編集</button>
+      <button class="cancelBtn" onclick="cancelReservation('${ev.event_id}')">キャンセル</button>
+    `;
+
+    list.appendChild(div);
+  });
+}
+
+function goEdit(eventId, start, end) {
+  const date = document.getElementById("datePicker").value;
+  const url = `edit.html?event_id=${eventId}&date=${date}&start=${start}&end=${end}`;
+  location.href = url;
+}
+
+async function cancelReservation(eventId) {
+  if (!confirm("本当にキャンセルしますか？")) return;
+
+  const apiUrl = `https://murotanisunlife-github-io.onrender.com/cancel?event_id=${eventId}`;
+
+  const res = await fetch(apiUrl, { method: "DELETE" });
+  const data = await res.json();
+
+  if (data.status === "ok") {
+    alert("キャンセルしました");
+    loadReservations();
+  } else {
+    alert("キャンセルに失敗：" + JSON.stringify(data));
+  }
+}
+</script>
+
+</body>
+</html>

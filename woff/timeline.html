@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>会議室 空き状況</title>
+<style>
+  body { font-family: sans-serif; padding: 16px; }
+  .slot {
+    padding: 10px; margin-bottom: 6px;
+    border-radius: 6px; color: #fff; font-weight: bold;
+  }
+  .free { background-color: #4CAF50; }
+  .busy { background-color: #F44336; }
+  button { padding: 6px 12px; margin-left: 10px; }
+</style>
+<script src="https://static.worksmobile.net/static/wm/woff/1.0/sdk.js"></script>
+</head>
+<body>
+
+<h2>会議室 空き状況</h2>
+
+<label>日付を選択</label>
+<input type="date" id="datePicker">
+<button onclick="loadTimeline()">読み込み</button>
+
+<div id="timeline" style="margin-top:20px;"></div>
+
+<script>
+let user;
+
+(async () => {
+  user = await woff.init({ woffId: "YOUR_WOFF_ID" });
+
+  const today = new Date();
+  const yyyy = today.getFullYear();
+  const mm = String(today.getMonth() + 1).padStart(2, "0");
+  const dd = String(today.getDate()).padStart(2, "0");
+  document.getElementById("datePicker").value = `${yyyy}-${mm}-${dd}`;
+
+  loadTimeline();
+})();
+
+async function loadTimeline() {
+  const dateStr = document.getElementById("datePicker").value;
+  const apiUrl = `https://murotanisunlife-github-io.onrender.com/availability?target_date=${dateStr}`;
+  const res = await fetch(apiUrl);
+  const busySlots = await res.json();
+
+  drawTimeline(dateStr, busySlots);
+}
+
+function drawTimeline(dateStr, busySlots) {
+  const timeline = document.getElementById("timeline");
+  timeline.innerHTML = "";
+
+  function toMinutes(t) {
+    const [h, m] = t.split(":").map(Number);
+    return h * 60 + m;
+  }
+
+  function isBusy(timeStr) {
+    const t = toMinutes(timeStr);
+    return busySlots.some(slot => {
+      const s = toMinutes(slot.start);
+      const e = toMinutes(slot.end);
+      return t >= s && t < e;
+    });
+  }
+
+  let start = 9 * 60;
+  let end = 18 * 60;
+
+  for (let t = start; t < end; t += 30) {
+    const hh = String(Math.floor(t / 60)).padStart(2, "0");
+    const mm = String(t % 60).padStart(2, "0");
+    const timeStr = `${hh}:${mm}`;
+
+    const div = document.createElement("div");
+    div.classList.add("slot");
+
+    if (isBusy(timeStr)) {
+      div.classList.add("busy");
+      div.innerText = `${timeStr} 〜 予約あり`;
+    } else {
+      div.classList.add("free");
+      div.innerHTML = `
+        ${timeStr} 〜 空き
+        <button onclick="goReserve('${dateStr}', '${timeStr}')">予約</button>
+      `;
+    }
+
+    timeline.appendChild(div);
+  }
+}
+
+function goReserve(date, start) {
+  location.href = `reserve.html?date=${date}&start=${start}`;
+}
+</script>
+
+</body>
+</html>
