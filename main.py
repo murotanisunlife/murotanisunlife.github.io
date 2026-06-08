@@ -1,296 +1,180 @@
-from datetime import datetime, date, time
-from typing import List, Optional
 import os
-import time as time_module
+import json
+
+import jwt
+from datetime import datetime
+import urllib
 import requests
-from jose import jwt
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, validator
-from dotenv import load_dotenv
 
-load_dotenv()
-
-API_BASE = os.getenv("LW_API_BASE")
-CLIENT_ID = os.getenv("LW_CLIENT_ID")
-CLIENT_SECRET = os.getenv("LW_CLIENT_SECRET")
-SERVICE_ACCOUNT = os.getenv("LW_SERVICE_ACCOUNT")
-PRIVATE_KEY_PATH = os.getenv("LW_PRIVATE_KEY_PATH")
-CALENDAR_ID = os.getenv("LW_CALENDAR_ID")
-
-app = FastAPI(title="Meeting Room Reservation API")
+BASE_API_URL = "https://www.worksapis.com/v1.0"
+BASE_AUTH_URL = "https://auth.worksmobile.com/oauth2/v2.0"
 
 
-# ---------- ISO8601 パーサー（Python 3.6 用） ----------
-def parse_iso8601(dt_str: str) -> datetime:
-    # "2024-06-05T10:00:00+09:00" → Python 3.6 では fromisoformat が使えない
-    try:
-        if dt_str.endswith("Z"):
-            dt_str = dt_str.replace("Z", "+00:00")
-        return datetime.strptime(dt_str, "%Y-%m-%dT%H:%M:%S%z")
-    except:
-        # ミリ秒付き
-        try:
-            if "." in dt_str:
-                base, ms = dt_str.split(".")
-                ms = ms.rstrip("Z")
-                if "+" in ms:
-                    ms, tz = ms.split("+")
-                    dt_str = base + "+" + tz
-                return datetime.strptime(base, "%Y-%m-%dT%H:%M:%S")
-        except:
-            raise ValueError("Invalid datetime format: " + dt_str)
+def get_jwt(client_id, service_account_id, privatekey):
+    """アクセストークンのためのJWT取得
+    """
+    current_time = datetime.now().timestamp()
+    iss = client_id
+    sub = service_account_id
+    iat = current_time
+    exp = current_time + (60 * 60) # 1時間
+
+    jws = jwt.encode(
+        {
+            "iss": iss,
+            "sub": sub,
+            "iat": iat,
+            "exp": exp
+        }, privatekey, algorithm="RS256")
+
+    return jws
 
 
-# ---------- モデル ----------
+def get_access_token(client_id, client_secret, scope, jws):
+    """アクセストークン取得"""
+    url = '{}/token'.format(BASE_AUTH_URL)
 
-class AvailabilityItem(BaseModel):
-    start: str
-    end: str
-
-
-class ReserveRequest(BaseModel):
-    date: date
-    start_time: str
-    end_time: str
-    title: str = "会議室予約"
-    requester_name: Optional[str] = None
-    requester_id: Optional[str] = None
-
-    @validator("start_time", "end_time")
-    def validate_time_format(cls, v: str) -> str:
-        datetime.strptime(v, "%H:%M")
-        return v
-
-    @validator("end_time")
-    def validate_time_order(cls, v: str, values):
-        if "start_time" in values:
-            st = datetime.strptime(values["start_time"], "%H:%M").time()
-            et = datetime.strptime(v, "%H:%M").time()
-            if et <= st:
-                raise ValueError("end_time must be after start_time")
-        return v
-
-
-class EditRequest(BaseModel):
-    event_id: str
-    date: date
-    start_time: str
-    end_time: str
-    title: str = "会議室予約"
-
-    @validator("start_time", "end_time")
-    def validate_time_format(cls, v: str) -> str:
-        datetime.strptime(v, "%H:%M")
-        return v
-
-
-# ---------- アクセストークン取得 ----------
-
-def get_access_token() -> str:
-    with open(PRIVATE_KEY_PATH, "r") as f:
-        private_key = f.read()
-
-    now = int(time_module.time())
-    payload = {
-        "iss": CLIENT_ID,
-        "sub": SERVICE_ACCOUNT,
-        "iat": now,
-        "exp": now + 3600,
+    headers = {
+        'Content-Type': 'application/x-www-form-urlencoded'
     }
 
-    assertion = jwt.encode(payload, private_key, algorithm="RS256")
-
-    url = f"{API_BASE}/oauth2/v2.0/token"
-    data = {
-        "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
-        "assertion": assertion,
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
-        "scope": "calendar"
-    }
-
-    resp = requests.post(url, data=data)
-    if resp.status_code != 200:
-        raise HTTPException(status_code=500, detail="Token error: " + resp.text)
-
-    return resp.json()["access_token"]
-
-
-# ---------- カレンダーから予定取得 ----------
-
-def fetch_events_for_date(target_date: date) -> List[dict]:
-    access_token = get_access_token()
-
-    start_dt = datetime.combine(target_date, time(0, 0))
-    end_dt = datetime.combine(target_date, time(23, 59))
-
-    url = f"{API_BASE}/calendar/v1/calendars/{CALENDAR_ID}/events"
     params = {
-        "start": start_dt.isoformat(),
-        "end": end_dt.isoformat(),
+        "assertion": jws,
+        "grant_type": urllib.parse.quote("urn:ietf:params:oauth:grant-type:jwt-bearer"),
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "scope": scope,
     }
-    headers = {"Authorization": "Bearer " + access_token}
 
-    resp = requests.get(url, headers=headers, params=params)
+    form_data = params
 
-    if resp.status_code != 200:
-        raise HTTPException(status_code=500, detail="Fetch error: " + resp.text)
+    r = requests.post(url=url, data=form_data, headers=headers)
 
-    return resp.json().get("events", [])
+    body = json.loads(r.text)
 
-
-# ---------- 予約済み時間帯を整形 ----------
-
-def to_time_str(dt_str: str) -> str:
-    dt = parse_iso8601(dt_str)
-    return dt.strftime("%H:%M")
+    return body
 
 
-def build_busy_slots(events: List[dict]) -> List[AvailabilityItem]:
-    busy = []
-    for ev in events:
-        start_str = to_time_str(ev["start"]["dateTime"])
-        end_str = to_time_str(ev["end"]["dateTime"])
-        busy.append(AvailabilityItem(start=start_str, end=end_str))
-    return busy
+def refresh_access_token(client_id, client_secret, refresh_token):
+    """アクセストークン更新"""
+    url = '{}/token'.format(BASE_AUTH_URL)
 
-
-# ---------- 30分単位チェック ----------
-
-def is_30min_unit(t: time) -> bool:
-    return t.minute in (0, 30)
-
-
-def check_30min_unit(start: time, end: time):
-    if not is_30min_unit(start) or not is_30min_unit(end):
-        raise HTTPException(status_code=400, detail="Time must be 30-minute units")
-
-
-# ---------- 重複チェック ----------
-
-def check_overlap(start: time, end: time, busy_slots: List[AvailabilityItem]):
-    for slot in busy_slots:
-        bs = datetime.strptime(slot.start, "%H:%M").time()
-        be = datetime.strptime(slot.end, "%H:%M").time()
-        if not (end <= bs or be <= start):
-            raise HTTPException(status_code=400, detail="Time slot already reserved")
-
-
-# ---------- 予約作成 ----------
-
-def create_event(req: ReserveRequest):
-    access_token = get_access_token()
-
-    start_dt = datetime.combine(req.date, datetime.strptime(req.start_time, "%H:%M").time())
-    end_dt = datetime.combine(req.date, datetime.strptime(req.end_time, "%H:%M").time())
-
-    url = f"{API_BASE}/calendar/v1/calendars/{CALENDAR_ID}/events"
     headers = {
-        "Authorization": "Bearer " + access_token,
-        "Content-Type": "application/json",
-    }
-    body = {
-        "summary": req.title,
-        "start": {"dateTime": start_dt.isoformat()},
-        "end": {"dateTime": end_dt.isoformat()},
-        "description": "Requester: {} ({})".format(req.requester_name or "", req.requester_id or ""),
+        'Content-Type': 'application/x-www-form-urlencoded'
     }
 
-    resp = requests.post(url, headers=headers, json=body)
+    params = {
+        "refresh_token": refresh_token,
+        "grant_type": "refresh_token",
+        "client_id": client_id,
+        "client_secret": client_secret,
+    }
 
-    if resp.status_code not in (200, 201):
-        raise HTTPException(status_code=500, detail="Create error: " + resp.text)
+    form_data = params
 
-    return resp.json()
+    r = requests.post(url=url, data=form_data, headers=headers)
+
+    body = json.loads(r.text)
+
+    return body
 
 
-# ---------- 予約編集 ----------
+def send_message(content, bot_id, user_id, access_token):
+    """メッセージ送信"""
+    url = "{}/bots/{}/users/{}/messages".format(BASE_API_URL, bot_id, user_id)
 
-@app.put("/edit")
-def edit_event(req: EditRequest):
-    access_token = get_access_token()
-
-    start_dt = datetime.combine(req.date, datetime.strptime(req.start_time, "%H:%M").time())
-    end_dt = datetime.combine(req.date, datetime.strptime(req.end_time, "%H:%M").time())
-
-    url = f"{API_BASE}/calendar/v1/calendars/{CALENDAR_ID}/events/{req.event_id}"
     headers = {
-        "Authorization": "Bearer " + access_token,
-        "Content-Type": "application/json",
+          'Content-Type' : 'application/json',
+          'Authorization' : "Bearer {}".format(access_token)
+        }
+
+    params = content
+    form_data = json.dumps(params)
+
+    r = requests.post(url=url, data=form_data, headers=headers)
+
+    r.raise_for_status()
+
+
+def main():
+    client_id = os.environ.get("ceUD6hrra7u8LE0yeVd9")
+    client_secret = os.environ.get("HfJ93E6PrU")
+    service_account_id = os.environ.get("hy8w3.serviceaccount@sunlife-1979")
+    privatekey = os.environ.get("-----BEGIN PRIVATE KEY-----
+MIIEvwIBADANBgkqhkiG9w0BAQEFAASCBKkwggSlAgEAAoIBAQChspaMokqhYOR+
+L0jefo9EzigkwdX19nMTBAVaFh44YNaIQDRx7toidwABIde6QIriVbrp/kDjpNBd
+oTVJq33QZD52JBDkIzotHU0fdvEPSnGsLvtu794iFKrDtcVTVPzAPCu2S8M5pR7i
+5KOtkG4eZ9uiF8qR2fnKnuGuH16HIasTyJv/nJgFWFSHinQOC/e89gZKrYMeFRUx
+/qnUHCChQi1pl0UzIkH1oAXuOzHZq9Q7AjbSCf6dJ8CiqCqsOXs74Gs86w6qm7iQ
+6LvGyOtwBvAKv5rdHHpDrO1fBCb3s62AB8STOTUbkyM44nb0o1ZgZKzbV+eli3O6
+WbayzXTDAgMBAAECggEAAI+G198ML1CXGjqNCXvAYpiDOGoc0WU2typ1Kv+tsWGl
+C9dOj7dGl6SWkwEE3A6kLKMzG1wBj5eQLHLvhyEZgTmHwXE6dB4q6njGxb1VTuA0
+rJOiEVA6TuMeolb3xYnnInLLbpgWL2EKqKsXz17IERTsKlOJu5+c3CukCQjRC56L
+QvY8Aq2hJ/TBcyl5IuX2mQCMyO5z7hkdybC664jFRqjdwSTHXxGYbeUDCABCLFCV
+Dpo2N2yElqXOWlAyjl6aFyJuTjnKj+O4HLM7Z1pSHKx1hNxcsgoZ8jGVUscaNH7u
+OTMflAEPmCo0QYdjuFaB5upZeQoD1Klvmet7IKg9AQKBgQC6tRAc7MzEJcX60vFq
+nIXOfpcZ8ZurpD6XzuEXiqppdvTb+DOY0mNZV3ItRKIFZrDD0OQoTixlaslK7fVW
+I9rYD/f0FwtuEPCiwU7lp9nkOYpiwkZvyhVoEwjQsIrzekAZ9Bq7wr2+YjP/Jq0K
+SLdATsySneHuY3G/AUIRmVbsQwKBgQDdtV92BtMx+rWL1PU2nle+Y7aSrDxHHbyj
++aB+1kjXjOI5PkqBzkLBKl9u8qHshAXHT06BTp5t71LLuNmc0uCrr5hhM65c5p84
+mBOn3ky9df4GVDRZm3DalrJOxbfpY6b8keWp56+KSM66mv2+F8B5udWxj1nSuNIJ
+epLabGsNgQKBgQCRFFMB9uuiWyu9HJ7lVd0PuQRW74wkUsskkWgNL/39V6crKnGF
+ha4XZUDedh9kDQi8EBzKSPxsjg7+P2vNVK0gCUCGFkYWb+lcvtM81zIUCrZCyW2M
+Pj5mEaxe5WADk/IteKYxUkC4qHx4/qelfx2ORezm3PILmJBxeFvLaxjFGwKBgQCg
+ZHpvNHjNi4aTZrkPjnYD8rc+XQQunsC+D/WgTP3dkrqGlx3n0oRQoorwBPBH3ysf
+CazNt0a+WYkYgN5NqfGHwz0F9RGLe/xsQPjXVOdHmXjwszI8MUvvl13fxwJKAiHo
+TtRLmqVP8WQ9c6tmPmCsr1h9YCunWrX4zYg4JH8+AQKBgQCIDG1vxFoNfQxP4+bM
+AdKD9guOno+G4N+6x6z1AkFfWTigftQqD0PXK4D3CGV3uPf/1XoqCuXFBb6QHtlg
+2oCJi+3O0ghjYwp2VOdRHpCfMmVsD1ccpBOnJXuM+tN33HEksO4mqdaKcmfTWQ4S
+L3dIa1dexwhQ5FXSDs3yryKBUw==
+-----END PRIVATE KEY-----")
+    bot_id = os.environ.get("12419749")
+    user_id = os.environ.get("su.37308@sunlife-1979")
+
+    scope = "bot"
+
+    # JWT生成
+    jwttoken = get_jwt(client_id, service_account_id, privatekey)
+
+    # アクセストークン取得
+    res = get_access_token(client_id, client_secret, scope, jwttoken)
+
+    access_token = res["access_token"]
+
+    # APIリクエスト (メッセージ送信)
+    content = {
+        "content": {
+            "type": "text",
+            "text": "Hello"
+        }
     }
-
-    body = {
-        "summary": req.title,
-        "start": {"dateTime": start_dt.isoformat()},
-        "end": {"dateTime": end_dt.isoformat()},
+    content = {
+        "content": {
+            "type": "flex",
+            "altText": "this is a flexible template",
+            "contents": {
+                "type": "bubble",
+                "body": {
+                    "type": "box",
+                    "layout": "vertical",
+                    "contents": [
+                        {
+                            "type": "text",
+                            "text": "hello"
+                        },
+                        {
+                            "type": "text",
+                            "text": "world"
+                        }
+                    ]
+                }
+            }
+        }
     }
+    res = send_message(content, bot_id, user_id, access_token)
 
-    resp = requests.put(url, headers=headers, json=body)
-
-    if resp.status_code not in (200, 201):
-        raise HTTPException(status_code=500, detail="Edit error: " + resp.text)
-
-    return {"status": "ok", "event_id": req.event_id}
+    return
 
 
-# ---------- 予約キャンセル ----------
-
-@app.delete("/cancel")
-def cancel(event_id: str):
-    access_token = get_access_token()
-
-    url = f"{API_BASE}/calendar/v1/calendars/{CALENDAR_ID}/events/{event_id}"
-    headers = {"Authorization": "Bearer " + access_token}
-
-    resp = requests.delete(url, headers=headers)
-
-    if resp.status_code not in (200, 204):
-        raise HTTPException(status_code=500, detail="Cancel error: " + resp.text)
-
-    return {"status": "ok", "event_id": event_id}
-
-
-# ---------- 自分の予約一覧 ----------
-
-@app.get("/my_reservations")
-def my_reservations(user_id: str, target_date: date):
-    events = fetch_events_for_date(target_date)
-    my_events = []
-
-    for ev in events:
-        desc = ev.get("description", "")
-        if user_id in desc:
-            my_events.append({
-                "event_id": ev["id"],
-                "summary": ev.get("summary", ""),
-                "start": ev["start"]["dateTime"],
-                "end": ev["end"]["dateTime"],
-            })
-
-    return my_events
-
-
-# ---------- 空き状況 ----------
-
-@app.get("/availability")
-def get_availability(target_date: date):
-    events = fetch_events_for_date(target_date)
-    return build_busy_slots(events)
-
-
-# ---------- 予約 ----------
-
-@app.post("/reserve")
-def reserve(req: ReserveRequest):
-    start_t = datetime.strptime(req.start_time, "%H:%M").time()
-    end_t = datetime.strptime(req.end_time, "%H:%M").time()
-
-    check_30min_unit(start_t, end_t)
-
-    events = fetch_events_for_date(req.date)
-    busy_slots = build_busy_slots(events)
-
-    check_overlap(start_t, end_t, busy_slots)
-
-    created = create_event(req)
-    return {"status": "ok", "event": created}
+if __name__ == "__main__":
+    main()
